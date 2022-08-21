@@ -1,0 +1,15 @@
+git:
+  config:
+    name: maxime1907
+    email: 19607336+maxime1907@users.noreply.github.com
+  update:
+    - new:
+        name: maxime1907
+        email: 19607336+maxime1907@users.noreply.github.com
+      old:
+        - maxime1907.dev@gmail.com
+    - new:
+        name: Rushaway
+        email: rushaway@hotmail.fr
+      old:
+        - 10320637-Rushaway@users.noreply.gitlab.com
