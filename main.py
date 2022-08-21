@@ -1,18 +1,46 @@
 import click
+import gitlab
 import os
 import subprocess
 import yaml
 
-from typing import Generator, Tuple
+from typing import Generator, Tuple, Optional
 
-def parse_config_file(*, path) -> None:
+def get_config_file(*, path):
+    """
+    Parse and return our yaml config file
+    """
     with open(path, "r") as stream:
         try:
-            yaml_config = yaml.safe_load(stream)
+            return yaml.safe_load(stream)
         except yaml.YAMLError as exc:
             print(exc)
+    return None
+
+def clone_gitlab_projects(*, tmp_path: str, user: str, group: Optional[str]) -> None:
+    """
+    Clone gitlab projects for a given user and/or group into a temporary folder
+    """
+    try:
+        gl = gitlab.Gitlab()
+        gl_user = gl.users.list(username=user)[0]
+        gl_projects = []
+        if group:
+            gl_group = gl.groups.list(search=group)[0]
+            gl_projects = gl_group.projects.list(get_all=True)
+        else:
+            gl_projects = gl_user.projects.list(get_all=True)
+        for gl_project in gl_projects:
+            print(f"Cloning {gl_project.name}...")
+            subprocess.run(["git", "clone", gl_project.ssh_url_to_repo, "--recursive", f"{tmp_path}/{gl_project.name}"])
+    except Exception as exc:
+        print("Error occured while fetching gitlab API")
+        print(exc)
 
 def iter_git_repos(*, root: str) -> Generator[Tuple[str, str], None, None]:
+    """
+    Iterate over folders that are git repositories
+    """
     for name in os.listdir(root):
         path = os.path.join(root, name)
         if not os.path.isdir(path):
@@ -23,12 +51,15 @@ def iter_git_repos(*, root: str) -> Generator[Tuple[str, str], None, None]:
         yield name, path
 
 
-def change_old_commit_authors(*, tmp_path: str) -> None:
-    # Change old commit email to github one
+def change_old_commit_authors(*, yaml_config, tmp_path: str) -> None:
+    """
+    Change old commit email to github one
+    """
+
     os.chdir(tmp_path)
 
-    subprocess.run(["git", "config", "user.name", yaml_config["config"]["name"]])
-    subprocess.run(["git", "config", "user.email", yaml_config["config"]["email"]])
+    subprocess.run(["git", "config", "user.name", yaml_config["git"]["config"]["name"]])
+    subprocess.run(["git", "config", "user.email", yaml_config["git"]["config"]["email"]])
 
     my_env = os.environ.copy()
     my_env["GIT_SEQUENCE_EDITOR"] = "sed -i -re \'s/^pick /e /\'"
@@ -36,9 +67,8 @@ def change_old_commit_authors(*, tmp_path: str) -> None:
 
     while True:
         author_email = subprocess.run(["git",  "show", "-s", "--format='%ae'"], capture_output=True, text=True).stdout.strip("\n").strip("\'")
-        # commit_date = subprocess.run(["git", "log", "-n", "1", "--format=%aD"], capture_output=True, text=True).stdout.strip("\n").strip("\'")
 
-        for git_author in yaml_config["update"]:
+        for git_author in yaml_config["git"]["update"]:
             if author_email in git_author["old"]:
                 subprocess.run(["git", "commit", "--amend", f'--author="{git_author["new"]["name"]} <{git_author["new"]["email"]}>"', "--no-edit"])
                 break
@@ -47,15 +77,31 @@ def change_old_commit_authors(*, tmp_path: str) -> None:
             break
 
 def github_fix_commit_dates() -> None:
+    """
+    Github considers the author date as the main source of truth for the date of commit
+    meanwhile Gitlab considers the committer date
+    """
     subprocess.run(["git", "filter-branch", "--env-filter", 'export GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"'])
 
 @click.command()
 @click.option('--config-file', default="config.yaml", show_default=True)
-@click.option('--github-user')
+@click.option('--gitlab-user')
+@click.option('--gitlab-group')
+@click.option('--github-user', required=True)
 @click.option('--github-repos-path', default="~/", show_default=True)
 @click.option('--github-repos-prefix', default="", show_default=True)
-def run(config_file: str, github_user: str, github_repos_path: str, github_repos_prefix: str) -> None:
-    parse_config_file(path=config_file)
+def run(config_file: str, gitlab_user: Optional[str], gitlab_group: Optional[str], github_user: str, github_repos_path: str, github_repos_prefix: str) -> None:
+    """
+    Import gitlab projects of a group or user to a given github user
+    """
+    yaml_config = get_config_file(path=config_file)
+
+    if gitlab_user:
+        tmp_path_gitlab_projects = "/tmp/gl_projects"
+        subprocess.run(["rm", "-Rf", tmp_path_gitlab_projects])
+        subprocess.run(["mkdir", "-p", tmp_path_gitlab_projects])
+        clone_gitlab_projects(tmp_path=tmp_path_gitlab_projects, user=gitlab_user, group=gitlab_group)
+        github_repos_path = tmp_path_gitlab_projects
 
     process = subprocess.run(["gh", "status"])
     if process.returncode != 0:
@@ -74,7 +120,7 @@ def run(config_file: str, github_user: str, github_repos_path: str, github_repos
 
         subprocess.run(["git", "clone", remote_url, tmp_path])
 
-        change_old_commit_authors(tmp_path=tmp_path)
+        change_old_commit_authors(yaml_config=yaml_config, tmp_path=tmp_path)
 
         github_fix_commit_dates()
 
