@@ -1,10 +1,11 @@
-import click
-import gitlab
 import os
 import subprocess
+from typing import Generator, Optional, Tuple
+
+import click
+import gitlab
 import yaml
 
-from typing import Generator, Tuple, Optional
 
 def get_config_file(*, path):
     """
@@ -17,7 +18,7 @@ def get_config_file(*, path):
             print(exc)
     return None
 
-def clone_gitlab_projects(*, tmp_path: str, user: str, group: Optional[str]) -> None:
+def clone_gitlab_projects(*, tmp_path: str, user: str, group: Optional[str], project: Optional[str]) -> None:
     """
     Clone gitlab projects for a given user and/or group into a temporary folder
     """
@@ -31,6 +32,8 @@ def clone_gitlab_projects(*, tmp_path: str, user: str, group: Optional[str]) -> 
         else:
             gl_projects = gl_user.projects.list(get_all=True)
         for gl_project in gl_projects:
+            if project and project not in gl_project.name:
+                continue
             print(f"Cloning {gl_project.name}...")
             subprocess.run(["git", "clone", gl_project.ssh_url_to_repo, "--recursive", f"{tmp_path}/{gl_project.name}"])
     except Exception as exc:
@@ -87,10 +90,11 @@ def github_fix_commit_dates() -> None:
 @click.option('--config-file', default="config.yaml", show_default=True)
 @click.option('--gitlab-user')
 @click.option('--gitlab-group')
+@click.option('--gitlab-project')
 @click.option('--github-user', required=True)
 @click.option('--github-repos-path', default="~/", show_default=True)
 @click.option('--github-repos-prefix', default="", show_default=True)
-def run(config_file: str, gitlab_user: Optional[str], gitlab_group: Optional[str], github_user: str, github_repos_path: str, github_repos_prefix: str) -> None:
+def run(config_file: str, gitlab_user: Optional[str], gitlab_group: Optional[str], gitlab_project: Optional[str], github_user: str, github_repos_path: str, github_repos_prefix: str) -> None:
     """
     Import gitlab projects of a group or user to a given github user
     """
@@ -100,7 +104,7 @@ def run(config_file: str, gitlab_user: Optional[str], gitlab_group: Optional[str
         tmp_path_gitlab_projects = "/tmp/gl_projects"
         subprocess.run(["rm", "-Rf", tmp_path_gitlab_projects])
         subprocess.run(["mkdir", "-p", tmp_path_gitlab_projects])
-        clone_gitlab_projects(tmp_path=tmp_path_gitlab_projects, user=gitlab_user, group=gitlab_group)
+        clone_gitlab_projects(tmp_path=tmp_path_gitlab_projects, user=gitlab_user, group=gitlab_group, project=gitlab_project)
         github_repos_path = tmp_path_gitlab_projects
 
     process = subprocess.run(["gh", "status"])
